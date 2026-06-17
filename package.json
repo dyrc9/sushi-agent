@@ -17,7 +17,7 @@
     "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^25.9.3",
     "prettier": "^3.5.3",
     "typescript": "^5.8.3"
   },
