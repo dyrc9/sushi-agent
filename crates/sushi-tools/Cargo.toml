@@ -1,0 +1,17 @@
+[package]
+name = "sushi-tools"
+version = "0.1.0"
+description = "Fast local utilities for sushi-agent."
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "sushi_tools"
+path = "src/lib.rs"
+
+[[bin]]
+name = "sushi-tools"
+path = "src/main.rs"
+
