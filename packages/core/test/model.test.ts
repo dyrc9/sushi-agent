@@ -1,0 +1,126 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { createHttpJsonModel } from "../src/index.js";
+
+test("createHttpJsonModel posts mapped requests and parses mapped responses", async () => {
+  let seenUrl = "";
+  let seenInit: RequestInit | undefined;
+
+  await withMockFetch(async (input, init) => {
+    seenUrl = String(input);
+    seenInit = init;
+    return new Response(JSON.stringify({ text: "ok", usage: { totalTokens: 9 } }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+  }, async () => {
+    const model = createHttpJsonModel({
+      name: "http-test",
+      endpoint: "https://models.example.test/v1/generate",
+      headers: { "x-test-header": "present" },
+      mapRequest(request) {
+        return {
+          prompt: request.messages.at(-1)?.content ?? "",
+          toolNames: request.tools.map((tool) => tool.name),
+        };
+      },
+      mapResponse(response) {
+        assert.deepEqual(response, { text: "ok", usage: { totalTokens: 9 } });
+        return {
+          output: "mapped:ok",
+          usage: { totalTokens: 9 },
+          raw: response,
+        };
+      },
+    });
+
+    const result = await model.generate({
+      messages: [{ role: "user", content: "hello" }],
+      tools: [
+        {
+          name: "sum",
+          description: "Add numbers",
+          inputSchema: { type: "object" },
+        },
+      ],
+      context: {},
+    });
+
+    assert.equal(result.output, "mapped:ok");
+    assert.equal(result.usage?.totalTokens, 9);
+  });
+
+  assert.equal(seenUrl, "https://models.example.test/v1/generate");
+  assert.equal(seenInit?.method, "POST");
+  assert.equal(
+    new Headers(seenInit?.headers).get("x-test-header"),
+    "present",
+  );
+  assert.deepEqual(JSON.parse(String(seenInit?.body)), {
+    prompt: "hello",
+    toolNames: ["sum"],
+  });
+});
+
+test("createHttpJsonModel includes response body on non-2xx errors", async () => {
+  await withMockFetch(
+    async () =>
+      new Response(JSON.stringify({ error: "rate_limited", retryAfterMs: 250 }), {
+        status: 429,
+        headers: { "content-type": "application/json" },
+      }),
+    async () => {
+      const model = createHttpJsonModel({
+        name: "http-test",
+        endpoint: "https://models.example.test/v1/generate",
+      });
+
+      await assert.rejects(
+        model.generate({
+          messages: [{ role: "user", content: "hello" }],
+          tools: [],
+          context: {},
+        }),
+        /status 429.*body=.*rate_limited/,
+      );
+    },
+  );
+});
+
+test("createHttpJsonModel includes response body on invalid JSON", async () => {
+  await withMockFetch(
+    async () =>
+      new Response("upstream overloaded", {
+        status: 200,
+        headers: { "content-type": "text/plain" },
+      }),
+    async () => {
+      const model = createHttpJsonModel({
+        name: "http-test",
+        endpoint: "https://models.example.test/v1/generate",
+      });
+
+      await assert.rejects(
+        model.generate({
+          messages: [{ role: "user", content: "hello" }],
+          tools: [],
+          context: {},
+        }),
+        /not valid JSON.*body=.*upstream overloaded/,
+      );
+    },
+  );
+});
+
+async function withMockFetch<T>(
+  mockFetch: typeof fetch,
+  run: () => Promise<T>,
+): Promise<T> {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = mockFetch;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}

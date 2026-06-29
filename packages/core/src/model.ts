@@ -82,12 +82,18 @@ export function createHttpJsonModel(options: {
         body: JSON.stringify(body),
         signal: request.signal,
       });
+      const responseText = await response.text();
 
       if (!response.ok) {
-        throw new Error(`Model request failed with status ${response.status}`);
+        throw new Error(
+          formatHttpError(
+            `Model request failed with status ${response.status}`,
+            responseText,
+          ),
+        );
       }
 
-      const json = (await response.json()) as JsonValue;
+      const json = parseJsonResponse(responseText);
       return (
         options.mapResponse?.(json) ?? {
           output: extractOutput(json),
@@ -113,4 +119,25 @@ function extractOutput(value: JsonValue): string {
 
 function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function parseJsonResponse(responseText: string): JsonValue {
+  try {
+    return JSON.parse(responseText) as JsonValue;
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      formatHttpError(`Model response was not valid JSON: ${reason}`, responseText),
+    );
+  }
+}
+
+function formatHttpError(message: string, responseText: string): string {
+  const body = responseText.trim();
+  if (!body) {
+    return message;
+  }
+  const bodyPreview =
+    body.length > 500 ? `${body.slice(0, 500)}...<truncated>` : body;
+  return `${message}; body=${JSON.stringify(bodyPreview)}`;
 }
