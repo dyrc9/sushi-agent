@@ -112,6 +112,115 @@ test("createHttpJsonModel includes response body on invalid JSON", async () => {
   );
 });
 
+test("createHttpJsonModel extracts OpenAI-compatible output, tool calls, and usage by default", async () => {
+  await withMockFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: "Need a tool",
+                tool_calls: [
+                  {
+                    id: "call_123",
+                    type: "function",
+                    function: {
+                      name: "sum",
+                      arguments: JSON.stringify({ a: 3, b: 4 }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+          usage: {
+            prompt_tokens: 11,
+            completion_tokens: 7,
+            total_tokens: 18,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    async () => {
+      const model = createHttpJsonModel({
+        name: "http-test",
+        endpoint: "https://models.example.test/v1/generate",
+      });
+
+      const result = await model.generate({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+        context: {},
+      });
+
+      assert.equal(result.output, "Need a tool");
+      assert.deepEqual(result.toolCalls, [
+        {
+          id: "call_123",
+          name: "sum",
+          input: { a: 3, b: 4 },
+        },
+      ]);
+      assert.deepEqual(result.usage, {
+        inputTokens: 11,
+        outputTokens: 7,
+        totalTokens: 18,
+      });
+    },
+  );
+});
+
+test("createHttpJsonModel joins text content parts from OpenAI-compatible responses", async () => {
+  await withMockFetch(
+    async () =>
+      new Response(
+        JSON.stringify({
+          choices: [
+            {
+              message: {
+                content: [
+                  { type: "text", text: "first line" },
+                  { type: "text", text: "second line" },
+                ],
+              },
+            },
+          ],
+          usage: {
+            input_tokens: 5,
+            output_tokens: 2,
+          },
+        }),
+        {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        },
+      ),
+    async () => {
+      const model = createHttpJsonModel({
+        name: "http-test",
+        endpoint: "https://models.example.test/v1/generate",
+      });
+
+      const result = await model.generate({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+        context: {},
+      });
+
+      assert.equal(result.output, "first line\nsecond line");
+      assert.deepEqual(result.usage, {
+        inputTokens: 5,
+        outputTokens: 2,
+        totalTokens: 7,
+      });
+    },
+  );
+});
+
 async function withMockFetch<T>(
   mockFetch: typeof fetch,
   run: () => Promise<T>,

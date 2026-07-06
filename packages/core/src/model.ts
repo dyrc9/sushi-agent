@@ -97,6 +97,8 @@ export function createHttpJsonModel(options: {
       return (
         options.mapResponse?.(json) ?? {
           output: extractOutput(json),
+          toolCalls: extractToolCalls(json),
+          usage: extractUsage(json),
           raw: json,
         }
       );
@@ -107,6 +109,33 @@ export function createHttpJsonModel(options: {
 function extractOutput(value: JsonValue): string {
   if (typeof value === "string") {
     return value;
+  }
+  const chatMessage = extractChatMessage(value);
+  if (chatMessage) {
+    const content = chatMessage.content;
+    if (typeof content === "string") {
+      return content;
+    }
+    if (Array.isArray(content)) {
+      const text = content
+        .map((part) => {
+          if (
+            part &&
+            typeof part === "object" &&
+            !Array.isArray(part) &&
+            part.type === "text" &&
+            typeof part.text === "string"
+          ) {
+            return part.text;
+          }
+          return "";
+        })
+        .filter(Boolean)
+        .join("\n");
+      if (text) {
+        return text;
+      }
+    }
   }
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const output = value.output ?? value.text ?? value.content;
@@ -119,6 +148,124 @@ function extractOutput(value: JsonValue): string {
 
 function estimateTokens(text: string): number {
   return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function extractToolCalls(value: JsonValue): ToolCall[] | undefined {
+  const chatMessage = extractChatMessage(value);
+  if (!chatMessage) {
+    return undefined;
+  }
+
+  const toolCalls = chatMessage.tool_calls;
+  if (!Array.isArray(toolCalls)) {
+    return undefined;
+  }
+
+  const parsed = toolCalls.flatMap((toolCall, index) => {
+    if (!toolCall || typeof toolCall !== "object" || Array.isArray(toolCall)) {
+      return [];
+    }
+    const functionCall = toolCall.function;
+    if (
+      !functionCall ||
+      typeof functionCall !== "object" ||
+      Array.isArray(functionCall) ||
+      typeof functionCall.name !== "string"
+    ) {
+      return [];
+    }
+
+    const rawArguments = functionCall.arguments;
+    const input = parseToolArguments(rawArguments);
+    if (!input) {
+      return [];
+    }
+
+    return [
+      {
+        id:
+          typeof toolCall.id === "string" && toolCall.id
+            ? toolCall.id
+            : `tool-call-${index + 1}`,
+        name: functionCall.name,
+        input,
+      },
+    ];
+  });
+
+  return parsed.length > 0 ? parsed : undefined;
+}
+
+function parseToolArguments(value: JsonValue): JsonObject | undefined {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    return value;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  try {
+    const parsed = JSON.parse(value) as JsonValue;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function extractUsage(value: JsonValue): Usage | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const rawUsage = value.usage;
+  if (!rawUsage || typeof rawUsage !== "object" || Array.isArray(rawUsage)) {
+    return undefined;
+  }
+
+  const usage: Usage = {};
+  const inputTokens = numberOrUndefined(rawUsage.input_tokens ?? rawUsage.prompt_tokens);
+  const outputTokens = numberOrUndefined(
+    rawUsage.output_tokens ?? rawUsage.completion_tokens,
+  );
+  const totalTokens = numberOrUndefined(rawUsage.total_tokens);
+
+  if (inputTokens !== undefined) {
+    usage.inputTokens = inputTokens;
+  }
+  if (outputTokens !== undefined) {
+    usage.outputTokens = outputTokens;
+  }
+  if (totalTokens !== undefined) {
+    usage.totalTokens = totalTokens;
+  } else if (inputTokens !== undefined || outputTokens !== undefined) {
+    usage.totalTokens = (inputTokens ?? 0) + (outputTokens ?? 0);
+  }
+
+  return Object.keys(usage).length > 0 ? usage : undefined;
+}
+
+function extractChatMessage(value: JsonValue): JsonObject | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const choices = value.choices;
+  if (!Array.isArray(choices) || choices.length === 0) {
+    return undefined;
+  }
+  const firstChoice = choices[0];
+  if (!firstChoice || typeof firstChoice !== "object" || Array.isArray(firstChoice)) {
+    return undefined;
+  }
+  const message = firstChoice.message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  return message;
+}
+
+function numberOrUndefined(value: JsonValue | undefined): number | undefined {
+  return typeof value === "number" ? value : undefined;
 }
 
 function parseJsonResponse(responseText: string): JsonValue {

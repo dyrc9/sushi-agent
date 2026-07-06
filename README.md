@@ -81,6 +81,36 @@ const mcp = createMcpStdioClient({
 });
 ```
 
+## OpenAI-Compatible Providers
+
+The generic HTTP adapter can be used directly against OpenAI-compatible chat endpoints. By default it understands common `choices[].message` output, `tool_calls`, and token usage fields, so a custom response mapper is only needed when the upstream payload differs.
+
+```ts
+import { createHttpJsonModel } from "@sushi-agent/core";
+
+const model = createHttpJsonModel({
+  name: "openai-compatible",
+  endpoint: "https://api.example.com/v1/chat/completions",
+  headers: {
+    authorization: `Bearer ${process.env.MODEL_API_KEY ?? ""}`,
+  },
+  mapRequest(request) {
+    return {
+      model: "gpt-4o-mini",
+      messages: request.messages,
+      tools: request.tools.map((tool) => ({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.inputSchema,
+        },
+      })),
+    };
+  },
+});
+```
+
 ## Rust Tools
 
 The Rust crate currently includes local text and file utilities:
