@@ -39,6 +39,10 @@ test("executes model-requested skills and feeds results back", async () => {
       const toolMessage = request.messages.find(
         (message) => message.role === "tool",
       );
+      const assistantMessage = request.messages.find(
+        (message) => message.role === "assistant",
+      );
+      assert.deepEqual(assistantMessage?.toolCalls, calls);
       return { output: `answer:${toolMessage?.content ?? ""}` };
     },
   };

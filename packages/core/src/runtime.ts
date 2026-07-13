@@ -118,7 +118,11 @@ export function createAgent(options: AgentOptions): AgentRuntime {
           };
         }
 
-        messages.push({ role: "assistant", content: modelResponse.output });
+        messages.push({
+          role: "assistant",
+          content: modelResponse.output,
+          toolCalls: modelResponse.toolCalls,
+        });
 
         for (const call of modelResponse.toolCalls) {
           const tool = tools.get(call.name);

@@ -8,6 +8,7 @@ export interface AgentMessage {
   content: string;
   name?: string;
   toolCallId?: string;
+  toolCalls?: ToolCall[];
 }
 
 export interface ModelTool {
@@ -33,6 +34,10 @@ export interface ModelResponse {
 export interface ModelProvider {
   name: string;
   generate(request: ModelRequest): Promise<ModelResponse>;
+}
+
+export interface OpenAIChatRequestOptions {
+  model: string;
 }
 
 export function createEchoModel(name = "echo"): ModelProvider {
@@ -104,6 +109,40 @@ export function createHttpJsonModel(options: {
       );
     },
   };
+}
+
+export function createOpenAIChatRequestMapper(
+  options: OpenAIChatRequestOptions,
+): (request: ModelRequest) => JsonObject {
+  return (request) => ({
+    model: options.model,
+    messages: request.messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+      ...(message.name ? { name: message.name } : {}),
+      ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
+      ...(message.toolCalls?.length
+        ? {
+            tool_calls: message.toolCalls.map((toolCall) => ({
+              id: toolCall.id,
+              type: "function",
+              function: {
+                name: toolCall.name,
+                arguments: JSON.stringify(toolCall.input),
+              },
+            })),
+          }
+        : {}),
+    })),
+    tools: request.tools.map((tool) => ({
+      type: "function",
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+      },
+    })),
+  });
 }
 
 function extractOutput(value: JsonValue): string {
@@ -224,7 +263,9 @@ function extractUsage(value: JsonValue): Usage | undefined {
   }
 
   const usage: Usage = {};
-  const inputTokens = numberOrUndefined(rawUsage.input_tokens ?? rawUsage.prompt_tokens);
+  const inputTokens = numberOrUndefined(
+    rawUsage.input_tokens ?? rawUsage.prompt_tokens,
+  );
   const outputTokens = numberOrUndefined(
     rawUsage.output_tokens ?? rawUsage.completion_tokens,
   );
@@ -254,7 +295,11 @@ function extractChatMessage(value: JsonValue): JsonObject | undefined {
     return undefined;
   }
   const firstChoice = choices[0];
-  if (!firstChoice || typeof firstChoice !== "object" || Array.isArray(firstChoice)) {
+  if (
+    !firstChoice ||
+    typeof firstChoice !== "object" ||
+    Array.isArray(firstChoice)
+  ) {
     return undefined;
   }
   const message = firstChoice.message;
@@ -274,7 +319,10 @@ function parseJsonResponse(responseText: string): JsonValue {
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(
-      formatHttpError(`Model response was not valid JSON: ${reason}`, responseText),
+      formatHttpError(
+        `Model response was not valid JSON: ${reason}`,
+        responseText,
+      ),
     );
   }
 }

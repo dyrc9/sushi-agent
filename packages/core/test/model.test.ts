@@ -1,61 +1,154 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createHttpJsonModel } from "../src/index.js";
+import {
+  createHttpJsonModel,
+  createOpenAIChatRequestMapper,
+} from "../src/index.js";
+
+test("createOpenAIChatRequestMapper formats messages and function tools", () => {
+  const mapRequest = createOpenAIChatRequestMapper({ model: "small-model" });
+
+  assert.deepEqual(
+    mapRequest({
+      messages: [
+        { role: "user", content: "add two numbers" },
+        {
+          role: "assistant",
+          content: "",
+          toolCalls: [
+            {
+              id: "call_123",
+              name: "sum",
+              input: { a: 3, b: 4 },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: "7",
+          name: "sum",
+          toolCallId: "call_123",
+        },
+      ],
+      tools: [
+        {
+          name: "sum",
+          description: "Add numbers",
+          inputSchema: {
+            type: "object",
+            properties: {
+              a: { type: "number" },
+              b: { type: "number" },
+            },
+            required: ["a", "b"],
+          },
+        },
+      ],
+      context: { tenant: "example" },
+    }),
+    {
+      model: "small-model",
+      messages: [
+        { role: "user", content: "add two numbers" },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call_123",
+              type: "function",
+              function: {
+                name: "sum",
+                arguments: JSON.stringify({ a: 3, b: 4 }),
+              },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: "7",
+          name: "sum",
+          tool_call_id: "call_123",
+        },
+      ],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "sum",
+            description: "Add numbers",
+            parameters: {
+              type: "object",
+              properties: {
+                a: { type: "number" },
+                b: { type: "number" },
+              },
+              required: ["a", "b"],
+            },
+          },
+        },
+      ],
+    },
+  );
+});
 
 test("createHttpJsonModel posts mapped requests and parses mapped responses", async () => {
   let seenUrl = "";
   let seenInit: RequestInit | undefined;
 
-  await withMockFetch(async (input, init) => {
-    seenUrl = String(input);
-    seenInit = init;
-    return new Response(JSON.stringify({ text: "ok", usage: { totalTokens: 9 } }), {
-      status: 200,
-      headers: { "content-type": "application/json" },
-    });
-  }, async () => {
-    const model = createHttpJsonModel({
-      name: "http-test",
-      endpoint: "https://models.example.test/v1/generate",
-      headers: { "x-test-header": "present" },
-      mapRequest(request) {
-        return {
-          prompt: request.messages.at(-1)?.content ?? "",
-          toolNames: request.tools.map((tool) => tool.name),
-        };
-      },
-      mapResponse(response) {
-        assert.deepEqual(response, { text: "ok", usage: { totalTokens: 9 } });
-        return {
-          output: "mapped:ok",
-          usage: { totalTokens: 9 },
-          raw: response,
-        };
-      },
-    });
-
-    const result = await model.generate({
-      messages: [{ role: "user", content: "hello" }],
-      tools: [
+  await withMockFetch(
+    async (input, init) => {
+      seenUrl = String(input);
+      seenInit = init;
+      return new Response(
+        JSON.stringify({ text: "ok", usage: { totalTokens: 9 } }),
         {
-          name: "sum",
-          description: "Add numbers",
-          inputSchema: { type: "object" },
+          status: 200,
+          headers: { "content-type": "application/json" },
         },
-      ],
-      context: {},
-    });
+      );
+    },
+    async () => {
+      const model = createHttpJsonModel({
+        name: "http-test",
+        endpoint: "https://models.example.test/v1/generate",
+        headers: { "x-test-header": "present" },
+        mapRequest(request) {
+          return {
+            prompt: request.messages.at(-1)?.content ?? "",
+            toolNames: request.tools.map((tool) => tool.name),
+          };
+        },
+        mapResponse(response) {
+          assert.deepEqual(response, { text: "ok", usage: { totalTokens: 9 } });
+          return {
+            output: "mapped:ok",
+            usage: { totalTokens: 9 },
+            raw: response,
+          };
+        },
+      });
 
-    assert.equal(result.output, "mapped:ok");
-    assert.equal(result.usage?.totalTokens, 9);
-  });
+      const result = await model.generate({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            name: "sum",
+            description: "Add numbers",
+            inputSchema: { type: "object" },
+          },
+        ],
+        context: {},
+      });
+
+      assert.equal(result.output, "mapped:ok");
+      assert.equal(result.usage?.totalTokens, 9);
+    },
+  );
 
   assert.equal(seenUrl, "https://models.example.test/v1/generate");
   assert.equal(seenInit?.method, "POST");
-  assert.equal(
-    new Headers(seenInit?.headers).get("x-test-header"),
-    "present",
-  );
+  assert.equal(new Headers(seenInit?.headers).get("x-test-header"), "present");
   assert.deepEqual(JSON.parse(String(seenInit?.body)), {
     prompt: "hello",
     toolNames: ["sum"],
@@ -65,10 +158,13 @@ test("createHttpJsonModel posts mapped requests and parses mapped responses", as
 test("createHttpJsonModel includes response body on non-2xx errors", async () => {
   await withMockFetch(
     async () =>
-      new Response(JSON.stringify({ error: "rate_limited", retryAfterMs: 250 }), {
-        status: 429,
-        headers: { "content-type": "application/json" },
-      }),
+      new Response(
+        JSON.stringify({ error: "rate_limited", retryAfterMs: 250 }),
+        {
+          status: 429,
+          headers: { "content-type": "application/json" },
+        },
+      ),
     async () => {
       const model = createHttpJsonModel({
         name: "http-test",

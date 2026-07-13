@@ -86,7 +86,10 @@ const mcp = createMcpStdioClient({
 The generic HTTP adapter can be used directly against OpenAI-compatible chat endpoints. By default it understands common `choices[].message` output, `tool_calls`, and token usage fields, so a custom response mapper is only needed when the upstream payload differs.
 
 ```ts
-import { createHttpJsonModel } from "@sushi-agent/core";
+import {
+  createHttpJsonModel,
+  createOpenAIChatRequestMapper,
+} from "@sushi-agent/core";
 
 const model = createHttpJsonModel({
   name: "openai-compatible",
@@ -94,22 +97,11 @@ const model = createHttpJsonModel({
   headers: {
     authorization: `Bearer ${process.env.MODEL_API_KEY ?? ""}`,
   },
-  mapRequest(request) {
-    return {
-      model: "gpt-4o-mini",
-      messages: request.messages,
-      tools: request.tools.map((tool) => ({
-        type: "function",
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.inputSchema,
-        },
-      })),
-    };
-  },
+  mapRequest: createOpenAIChatRequestMapper({ model: "gpt-4o-mini" }),
 });
 ```
+
+The request helper converts function tools, assistant tool calls, and tool-result message IDs to the OpenAI chat-completions shape. Use a custom `mapRequest` when the upstream API needs additional provider-specific fields.
 
 ## Rust Tools
 
