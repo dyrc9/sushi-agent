@@ -92,6 +92,49 @@ test("createOpenAIChatRequestMapper formats messages and function tools", () => 
   );
 });
 
+test("createOpenAIChatRequestMapper adds provider fields without replacing runtime fields", () => {
+  const mapRequest = createOpenAIChatRequestMapper({
+    model: "small-model",
+    additionalBody: {
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      model: "ignored-model",
+      messages: [],
+      tools: [],
+    },
+  });
+
+  assert.deepEqual(
+    mapRequest({
+      messages: [{ role: "user", content: "return JSON" }],
+      tools: [
+        {
+          name: "lookup",
+          description: "Look up a value",
+          inputSchema: { type: "object" },
+        },
+      ],
+      context: {},
+    }),
+    {
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+      model: "small-model",
+      messages: [{ role: "user", content: "return JSON" }],
+      tools: [
+        {
+          type: "function",
+          function: {
+            name: "lookup",
+            description: "Look up a value",
+            parameters: { type: "object" },
+          },
+        },
+      ],
+    },
+  );
+});
+
 test("createHttpJsonModel posts mapped requests and parses mapped responses", async () => {
   let seenUrl = "";
   let seenInit: RequestInit | undefined;

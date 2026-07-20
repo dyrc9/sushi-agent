@@ -38,6 +38,7 @@ export interface ModelProvider {
 
 export interface OpenAIChatRequestOptions {
   model: string;
+  additionalBody?: JsonObject;
 }
 
 export function createEchoModel(name = "echo"): ModelProvider {
@@ -115,6 +116,7 @@ export function createOpenAIChatRequestMapper(
   options: OpenAIChatRequestOptions,
 ): (request: ModelRequest) => JsonObject {
   return (request) => ({
+    ...options.additionalBody,
     model: options.model,
     messages: request.messages.map((message) => ({
       role: message.role,

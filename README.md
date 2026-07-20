@@ -97,11 +97,17 @@ const model = createHttpJsonModel({
   headers: {
     authorization: `Bearer ${process.env.MODEL_API_KEY ?? ""}`,
   },
-  mapRequest: createOpenAIChatRequestMapper({ model: "gpt-4o-mini" }),
+  mapRequest: createOpenAIChatRequestMapper({
+    model: "gpt-4o-mini",
+    additionalBody: {
+      temperature: 0.2,
+      response_format: { type: "json_object" },
+    },
+  }),
 });
 ```
 
-The request helper converts function tools, assistant tool calls, and tool-result message IDs to the OpenAI chat-completions shape. Use a custom `mapRequest` when the upstream API needs additional provider-specific fields.
+The request helper converts function tools, assistant tool calls, and tool-result message IDs to the OpenAI chat-completions shape. `additionalBody` adds provider-specific request fields while the mapper keeps ownership of `model`, `messages`, and `tools`. Use a custom `mapRequest` when the upstream payload needs a different structure.
 
 ## Rust Tools
 
