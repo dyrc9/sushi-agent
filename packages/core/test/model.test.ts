@@ -1,9 +1,174 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createAnthropicMessagesRequestMapper,
+  createAnthropicMessagesResponseMapper,
   createHttpJsonModel,
   createOpenAIChatRequestMapper,
 } from "../src/index.js";
+import type { JsonObject } from "../src/index.js";
+
+test("createAnthropicMessagesRequestMapper formats system prompts and tools", () => {
+  const mapRequest = createAnthropicMessagesRequestMapper({
+    model: "claude-model",
+    maxTokens: 1024,
+    additionalBody: {
+      temperature: 0.2,
+      model: "ignored-model",
+      max_tokens: 1,
+      system: "ignored system",
+      messages: [],
+      tools: [],
+    },
+  });
+
+  assert.deepEqual(
+    mapRequest({
+      messages: [
+        { role: "system", content: "Be concise." },
+        { role: "user", content: "add two numbers" },
+        {
+          role: "assistant",
+          content: "I'll calculate that.",
+          toolCalls: [
+            {
+              id: "toolu_123",
+              name: "sum",
+              input: { a: 3, b: 4 },
+            },
+          ],
+        },
+        {
+          role: "tool",
+          content: "7",
+          name: "sum",
+          toolCallId: "toolu_123",
+        },
+        {
+          role: "tool",
+          content: "saved",
+          name: "store",
+          toolCallId: "toolu_456",
+        },
+      ],
+      tools: [
+        {
+          name: "sum",
+          description: "Add numbers",
+          inputSchema: {
+            type: "object",
+            properties: {
+              a: { type: "number" },
+              b: { type: "number" },
+            },
+            required: ["a", "b"],
+          },
+        },
+      ],
+      context: {},
+    }),
+    {
+      temperature: 0.2,
+      model: "claude-model",
+      max_tokens: 1024,
+      system: "Be concise.",
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "add two numbers" }],
+        },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: "I'll calculate that." },
+            {
+              type: "tool_use",
+              id: "toolu_123",
+              name: "sum",
+              input: { a: 3, b: 4 },
+            },
+          ],
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_123",
+              content: "7",
+            },
+            {
+              type: "tool_result",
+              tool_use_id: "toolu_456",
+              content: "saved",
+            },
+          ],
+        },
+      ],
+      tools: [
+        {
+          name: "sum",
+          description: "Add numbers",
+          input_schema: {
+            type: "object",
+            properties: {
+              a: { type: "number" },
+              b: { type: "number" },
+            },
+            required: ["a", "b"],
+          },
+        },
+      ],
+    },
+  );
+});
+
+test("createAnthropicMessagesResponseMapper extracts content, tools, and usage", () => {
+  const mapResponse = createAnthropicMessagesResponseMapper();
+  const response: JsonObject = {
+    content: [
+      { type: "text", text: "I'll calculate that." },
+      {
+        type: "tool_use",
+        id: "toolu_123",
+        name: "sum",
+        input: { a: 3, b: 4 },
+      },
+      { type: "text", text: "One moment." },
+    ],
+    usage: { input_tokens: 12, output_tokens: 8 },
+  };
+
+  assert.deepEqual(mapResponse(response), {
+    output: "I'll calculate that.\nOne moment.",
+    toolCalls: [
+      {
+        id: "toolu_123",
+        name: "sum",
+        input: { a: 3, b: 4 },
+      },
+    ],
+    usage: { inputTokens: 12, outputTokens: 8, totalTokens: 20 },
+    raw: response,
+  });
+});
+
+test("createAnthropicMessagesRequestMapper rejects tool results without an ID", () => {
+  const mapRequest = createAnthropicMessagesRequestMapper({
+    model: "claude-model",
+    maxTokens: 1024,
+  });
+
+  assert.throws(
+    () =>
+      mapRequest({
+        messages: [{ role: "tool", content: "7" }],
+        tools: [],
+        context: {},
+      }),
+    /toolCallId/,
+  );
+});
 
 test("createOpenAIChatRequestMapper formats messages and function tools", () => {
   const mapRequest = createOpenAIChatRequestMapper({ model: "small-model" });

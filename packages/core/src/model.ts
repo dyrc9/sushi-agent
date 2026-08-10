@@ -41,6 +41,12 @@ export interface OpenAIChatRequestOptions {
   additionalBody?: JsonObject;
 }
 
+export interface AnthropicMessagesRequestOptions {
+  model: string;
+  maxTokens: number;
+  additionalBody?: JsonObject;
+}
+
 export function createEchoModel(name = "echo"): ModelProvider {
   return {
     name,
@@ -145,6 +151,126 @@ export function createOpenAIChatRequestMapper(
       },
     })),
   });
+}
+
+export function createAnthropicMessagesRequestMapper(
+  options: AnthropicMessagesRequestOptions,
+): (request: ModelRequest) => JsonObject {
+  return (request) => {
+    const additionalBody = { ...options.additionalBody };
+    for (const field of [
+      "model",
+      "max_tokens",
+      "messages",
+      "system",
+      "tools",
+    ]) {
+      delete additionalBody[field];
+    }
+
+    const system = request.messages
+      .filter((message) => message.role === "system")
+      .map((message) => message.content)
+      .join("\n\n");
+    const messages: JsonObject[] = [];
+
+    for (const message of request.messages) {
+      if (message.role === "system") {
+        continue;
+      }
+
+      const role = message.role === "tool" ? "user" : message.role;
+      const content: JsonValue[] = [];
+      if (message.role === "tool") {
+        if (!message.toolCallId) {
+          throw new Error("Anthropic tool results require a toolCallId");
+        }
+        content.push({
+          type: "tool_result",
+          tool_use_id: message.toolCallId,
+          content: message.content,
+        });
+      } else {
+        if (message.content) {
+          content.push({ type: "text", text: message.content });
+        }
+        for (const toolCall of message.toolCalls ?? []) {
+          content.push({
+            type: "tool_use",
+            id: toolCall.id,
+            name: toolCall.name,
+            input: toolCall.input,
+          });
+        }
+      }
+
+      const previous = messages.at(-1);
+      if (previous?.role === role && Array.isArray(previous.content)) {
+        previous.content.push(...content);
+      } else {
+        messages.push({ role, content });
+      }
+    }
+
+    return {
+      ...additionalBody,
+      model: options.model,
+      max_tokens: options.maxTokens,
+      ...(system ? { system } : {}),
+      messages,
+      tools: request.tools.map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        input_schema: tool.inputSchema,
+      })),
+    };
+  };
+}
+
+export function createAnthropicMessagesResponseMapper(): (
+  response: JsonValue,
+) => ModelResponse {
+  return (response) => {
+    const content =
+      response && typeof response === "object" && !Array.isArray(response)
+        ? response.content
+        : undefined;
+    const blocks = Array.isArray(content) ? content : [];
+    const output = blocks
+      .flatMap((block) =>
+        block &&
+        typeof block === "object" &&
+        !Array.isArray(block) &&
+        block.type === "text" &&
+        typeof block.text === "string"
+          ? [block.text]
+          : [],
+      )
+      .join("\n");
+    const toolCalls = blocks.flatMap((block) => {
+      if (
+        !block ||
+        typeof block !== "object" ||
+        Array.isArray(block) ||
+        block.type !== "tool_use" ||
+        typeof block.id !== "string" ||
+        typeof block.name !== "string" ||
+        !block.input ||
+        typeof block.input !== "object" ||
+        Array.isArray(block.input)
+      ) {
+        return [];
+      }
+      return [{ id: block.id, name: block.name, input: block.input }];
+    });
+
+    return {
+      output,
+      ...(toolCalls.length > 0 ? { toolCalls } : {}),
+      usage: extractUsage(response),
+      raw: response,
+    };
+  };
 }
 
 function extractOutput(value: JsonValue): string {

@@ -109,6 +109,34 @@ const model = createHttpJsonModel({
 
 The request helper converts function tools, assistant tool calls, and tool-result message IDs to the OpenAI chat-completions shape. `additionalBody` adds provider-specific request fields while the mapper keeps ownership of `model`, `messages`, and `tools`. Use a custom `mapRequest` when the upstream payload needs a different structure.
 
+## Anthropic Messages Providers
+
+The same HTTP adapter can target Anthropic's Messages API with its request and response mappers. They move system prompts to the top-level `system` field, convert tool calls and results to content blocks, and normalize text, tool use, and token usage back into the runtime contract.
+
+```ts
+import {
+  createAnthropicMessagesRequestMapper,
+  createAnthropicMessagesResponseMapper,
+  createHttpJsonModel,
+} from "@sushi-agent/core";
+
+const model = createHttpJsonModel({
+  name: "anthropic",
+  endpoint: "https://api.anthropic.com/v1/messages",
+  headers: {
+    "x-api-key": process.env.ANTHROPIC_API_KEY ?? "",
+    "anthropic-version": "2023-06-01",
+  },
+  mapRequest: createAnthropicMessagesRequestMapper({
+    model: "your-claude-model",
+    maxTokens: 1024,
+  }),
+  mapResponse: createAnthropicMessagesResponseMapper(),
+});
+```
+
+As with the OpenAI mapper, `additionalBody` can add provider-specific options but cannot replace runtime-owned `model`, `max_tokens`, `system`, `messages`, or `tools` fields.
+
 ## Rust Tools
 
 The Rust crate currently includes local text and file utilities:
