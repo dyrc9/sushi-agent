@@ -51,6 +51,9 @@ export function createAgent(options: AgentOptions): AgentRuntime {
   return {
     tools,
     async run(input, runOptions) {
+      const signal = runOptions?.signal;
+      signal?.throwIfAborted();
+
       const request = normalizeInput(input);
       const traceStart = memorySink.events.length;
       const usage: Usage = {};
@@ -71,6 +74,8 @@ export function createAgent(options: AgentOptions): AgentRuntime {
 
       const maxToolRounds = options.maxToolRounds ?? 3;
       for (let round = 0; round <= maxToolRounds; round += 1) {
+        signal?.throwIfAborted();
+
         const modelTools: ModelTool[] = tools.list().map((tool) => ({
           name: tool.name,
           description: tool.description,
@@ -89,8 +94,9 @@ export function createAgent(options: AgentOptions): AgentRuntime {
           messages,
           tools: modelTools,
           context: request.context,
-          signal: runOptions?.signal,
+          signal,
         });
+        signal?.throwIfAborted();
 
         mergeUsage(usage, modelResponse.usage);
         await record(
@@ -125,6 +131,8 @@ export function createAgent(options: AgentOptions): AgentRuntime {
         });
 
         for (const call of modelResponse.toolCalls) {
+          signal?.throwIfAborted();
+
           const tool = tools.get(call.name);
           if (!tool) {
             const result = {
@@ -154,8 +162,10 @@ export function createAgent(options: AgentOptions): AgentRuntime {
             const output = await tool.run({
               input: call.input,
               context: request.context,
-              signal: runOptions?.signal,
+              signal,
             });
+            signal?.throwIfAborted();
+
             const result: ToolResult = {
               callId: call.id,
               name: call.name,
@@ -176,6 +186,8 @@ export function createAgent(options: AgentOptions): AgentRuntime {
               }),
             );
           } catch (error) {
+            signal?.throwIfAborted();
+
             const message =
               error instanceof Error ? error.message : String(error);
             const result = { callId: call.id, name: call.name, error: message };

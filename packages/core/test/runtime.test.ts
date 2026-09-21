@@ -71,3 +71,56 @@ test("executes model-requested skills and feeds results back", async () => {
     output: 7,
   });
 });
+
+test("does not start a run when its signal is already aborted", async () => {
+  const controller = new AbortController();
+  controller.abort(new Error("cancel before start"));
+  let modelCalls = 0;
+  const model: ModelProvider = {
+    name: "test",
+    async generate() {
+      modelCalls += 1;
+      return { output: "unexpected" };
+    },
+  };
+
+  const agent = createAgent({ model });
+
+  await assert.rejects(
+    agent.run("hello", { signal: controller.signal }),
+    /cancel before start/,
+  );
+  assert.equal(modelCalls, 0);
+});
+
+test("propagates cancellation during a tool call", async () => {
+  const controller = new AbortController();
+  let modelCalls = 0;
+  const model: ModelProvider = {
+    name: "tool-model",
+    async generate() {
+      modelCalls += 1;
+      return {
+        output: "calling tool",
+        toolCalls: [{ id: "call-1", name: "cancel", input: {} }],
+      };
+    },
+  };
+  const cancel = defineSkill({
+    name: "cancel",
+    description: "Cancel the current run.",
+    inputSchema: { type: "object" },
+    run() {
+      controller.abort(new Error("cancel during tool"));
+      throw new Error("tool observed cancellation");
+    },
+  });
+
+  const agent = createAgent({ model, skills: [cancel] });
+
+  await assert.rejects(
+    agent.run("cancel", { signal: controller.signal }),
+    /cancel during tool/,
+  );
+  assert.equal(modelCalls, 1);
+});
