@@ -57,3 +57,46 @@ test("includes stderr when the MCP server exits before replying", async () => {
     client.close();
   }
 });
+
+test("cancels pending requests without closing the MCP client", async () => {
+  const client = createMcpStdioClient({
+    command: process.execPath,
+    args: [path.join(fixtureDir, "mcp-cancellation.js")],
+  });
+  const controller = new AbortController();
+  const reason = new Error("request no longer needed");
+
+  try {
+    const request = client.request("wait", {}, { signal: controller.signal });
+    controller.abort(reason);
+
+    await assert.rejects(request, (error) => error === reason);
+    assert.deepEqual(await client.request("cancellation-status"), {
+      cancelledRequestIds: [1],
+    });
+  } finally {
+    client.close();
+  }
+});
+
+test("does not send MCP requests with an already aborted signal", async () => {
+  const client = createMcpStdioClient({
+    command: process.execPath,
+    args: [path.join(fixtureDir, "mcp-cancellation.js")],
+  });
+  const controller = new AbortController();
+  const reason = new Error("already cancelled");
+  controller.abort(reason);
+
+  try {
+    await assert.rejects(
+      client.request("wait", {}, { signal: controller.signal }),
+      (error) => error === reason,
+    );
+    assert.deepEqual(await client.request("cancellation-status"), {
+      cancelledRequestIds: [],
+    });
+  } finally {
+    client.close();
+  }
+});

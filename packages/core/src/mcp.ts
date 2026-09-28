@@ -9,9 +9,23 @@ export interface McpStdioClientOptions {
   env?: NodeJS.ProcessEnv;
 }
 
+export interface McpRequestOptions {
+  signal?: AbortSignal;
+}
+
 export interface McpClient {
-  request(method: string, params?: JsonObject): Promise<JsonValue>;
+  request(
+    method: string,
+    params?: JsonObject,
+    options?: McpRequestOptions,
+  ): Promise<JsonValue>;
   close(): void;
+}
+
+interface PendingRequest {
+  resolve(value: JsonValue): void;
+  reject(reason?: unknown): void;
+  cleanup(): void;
 }
 
 export function createMcpStdioClient(
@@ -19,13 +33,7 @@ export function createMcpStdioClient(
 ): McpClient {
   let nextId = 1;
   const stderrBuffer = createStderrBuffer();
-  const pending = new Map<
-    number,
-    {
-      resolve(value: JsonValue): void;
-      reject(error: Error): void;
-    }
-  >();
+  const pending = new Map<number, PendingRequest>();
 
   const child = spawn(options.command, options.args ?? [], {
     cwd: options.cwd,
@@ -39,7 +47,12 @@ export function createMcpStdioClient(
   attachExitHandler(child, pending, stderrBuffer);
 
   return {
-    request(method, params) {
+    request(method, params, requestOptions) {
+      const signal = requestOptions?.signal;
+      if (signal?.aborted) {
+        return Promise.reject(signal.reason);
+      }
+
       const id = nextId;
       nextId += 1;
       const payload = {
@@ -50,11 +63,24 @@ export function createMcpStdioClient(
       };
 
       return new Promise<JsonValue>((resolve, reject) => {
-        pending.set(id, { resolve, reject });
+        const onAbort = () => {
+          const waiter = takePending(pending, id);
+          if (!waiter) {
+            return;
+          }
+          sendCancellation(child, id, signal?.reason);
+          waiter.reject(signal?.reason);
+        };
+        pending.set(id, {
+          resolve,
+          reject,
+          cleanup: () => signal?.removeEventListener("abort", onAbort),
+        });
+        signal?.addEventListener("abort", onAbort, { once: true });
+
         child.stdin.write(`${JSON.stringify(payload)}\n`, (error) => {
           if (error) {
-            pending.delete(id);
-            reject(error);
+            takePending(pending, id)?.reject(error);
           }
         });
       });
@@ -69,10 +95,7 @@ export function createMcpStdioClient(
 function attachLineHandler(
   lines: Interface,
   child: ChildProcessWithoutNullStreams,
-  pending: Map<
-    number,
-    { resolve(value: JsonValue): void; reject(error: Error): void }
-  >,
+  pending: Map<number, PendingRequest>,
   stderrBuffer: ReturnType<typeof createStderrBuffer>,
 ): void {
   lines.on("line", (line) => {
@@ -103,11 +126,10 @@ function attachLineHandler(
     if (typeof message.id !== "number") {
       return;
     }
-    const waiter = pending.get(message.id);
+    const waiter = takePending(pending, message.id);
     if (!waiter) {
       return;
     }
-    pending.delete(message.id);
     if (message.error) {
       waiter.reject(new Error(message.error.message ?? "MCP request failed"));
       return;
@@ -127,10 +149,7 @@ function attachStderrHandler(
 
 function attachExitHandler(
   child: ChildProcessWithoutNullStreams,
-  pending: Map<
-    number,
-    { resolve(value: JsonValue): void; reject(error: Error): void }
-  >,
+  pending: Map<number, PendingRequest>,
   stderrBuffer: ReturnType<typeof createStderrBuffer>,
 ): void {
   child.once("exit", (code, signal) => {
@@ -156,16 +175,45 @@ function attachExitHandler(
 }
 
 function rejectPending(
-  pending: Map<
-    number,
-    { resolve(value: JsonValue): void; reject(error: Error): void }
-  >,
+  pending: Map<number, PendingRequest>,
   error: Error,
 ): void {
   for (const waiter of pending.values()) {
+    waiter.cleanup();
     waiter.reject(error);
   }
   pending.clear();
+}
+
+function takePending(
+  pending: Map<number, PendingRequest>,
+  id: number,
+): PendingRequest | undefined {
+  const waiter = pending.get(id);
+  if (waiter) {
+    pending.delete(id);
+    waiter.cleanup();
+  }
+  return waiter;
+}
+
+function sendCancellation(
+  child: ChildProcessWithoutNullStreams,
+  requestId: number,
+  reason: unknown,
+): void {
+  if (!child.stdin.writable) {
+    return;
+  }
+  const payload = {
+    jsonrpc: "2.0",
+    method: "notifications/cancelled",
+    params: {
+      requestId,
+      reason: reason instanceof Error ? reason.message : String(reason),
+    },
+  };
+  child.stdin.write(`${JSON.stringify(payload)}\n`, () => {});
 }
 
 function createStderrBuffer(limit = 4000) {

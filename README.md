@@ -79,7 +79,13 @@ const mcp = createMcpStdioClient({
   command: "node",
   args: ["./server.js"],
 });
+
+const result = await mcp.request("tools/call", params, { signal });
 ```
+
+Aborting a request removes its pending client state and sends an MCP
+`notifications/cancelled` message to the server. The stdio client remains
+available for other requests.
 
 ## OpenAI-Compatible Providers
 
